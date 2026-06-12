@@ -18,3 +18,15 @@ class BaseSurrogate(ABC):
     def explain(self, **kwargs) -> dict:
         """Optional: return human-inspectable components. Default empty."""
         return {}
+
+    # -- persistence (mặc định pickle; TGA-KAN override bằng torch.save) -----
+    def save(self, path: str):
+        import pickle
+        with open(path, "wb") as f:
+            pickle.dump(self, f)
+
+    @classmethod
+    def load(cls, path: str, **kwargs):
+        import pickle
+        with open(path, "rb") as f:
+            return pickle.load(f)

@@ -262,3 +262,33 @@ class TGAKANSurrogate(BaseSurrogate):
                 for e in self.model.experts
             ],
         }
+
+    # -- persistence --------------------------------------------------------
+    def save(self, path: str):
+        """Lưu state_dict + config + thống kê chuẩn hóa vào một file .pt.
+
+        mu_/sd_ BẮT BUỘC phải lưu kèm: predict chuẩn hóa input bằng chúng,
+        thiếu là load ra dự đoán sai hoàn toàn.
+        """
+        if self.model is None:
+            raise RuntimeError("chưa fit, không có gì để lưu")
+        torch.save({
+            "state_dict": self.model.state_dict(),
+            "cfg": self.cfg,
+            "act_dim": self.act_dim, "obs_dim": self.obs_dim,
+            "mu_": None if self.mu_ is None else np.asarray(self.mu_),
+            "sd_": None if self.sd_ is None else np.asarray(self.sd_),
+            "seed": self.seed,
+        }, path)
+
+    @classmethod
+    def load(cls, path: str, device: str = "cuda", verbose: bool = False):
+        ckpt = torch.load(path, map_location=device, weights_only=False)
+        obj = cls(ckpt["act_dim"], ckpt["obs_dim"], device=device,
+                  seed=ckpt.get("seed", 0), verbose=verbose, **ckpt["cfg"])
+        obj.model = TGAKANModule(obj.act_dim, obj.obs_dim,
+                                 seed=obj.seed, **obj.cfg).to(device)
+        obj.model.load_state_dict(ckpt["state_dict"])
+        obj.model.eval()
+        obj.mu_ = ckpt["mu_"]; obj.sd_ = ckpt["sd_"]
+        return obj

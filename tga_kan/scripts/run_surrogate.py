@@ -37,6 +37,8 @@ def main():
     ap.add_argument("--axis-only", dest="oblique", action="store_false")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--save", default=None,
+                    help="lưu surrogate đã fit ra path này (.pt cho tga, .pkl cho khác)")
     args = ap.parse_args()
 
     spec = EnvSpec.from_json(os.path.join(args.run, "meta.json"))
@@ -55,6 +57,10 @@ def main():
     surrogate, _ = dagger(env_thunk, oracle, surrogate,
                           n_steps_per_iter=args.steps_per_iter,
                           dagger_iters=args.dagger_iters, seed=args.seed)
+
+    if args.save:
+        surrogate.save(args.save)
+        print(f"surrogate saved -> {args.save}")
 
     test = collect_oracle_rollouts(env_thunk, oracle, args.test_steps, seed=999)
     metrics = full_eval(env_thunk, oracle, surrogate, test.S, test.A,
