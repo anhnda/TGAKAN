@@ -26,7 +26,7 @@ class PolicyOracle:
     def load(cls, model_path: str, vecnorm_path: str | None = None):
         from stable_baselines3 import PPO
         from utils import resolve_device
-        model = PPO.load(model_path, device=resolve_device("auto"))
+        model = PPO.load(model_path, device=resolve_device("cpu"))
         vecnorm = None
         if vecnorm_path and os.path.exists(vecnorm_path):
             from stable_baselines3.common.vec_env import VecNormalize, DummyVecEnv
