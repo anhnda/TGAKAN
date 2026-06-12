@@ -23,17 +23,23 @@ class PolicyOracle:
 
     # -- construction -------------------------------------------------------
     @classmethod
-    def load(cls, model_path: str, vecnorm_path: str | None = None):
+    def load(cls, model_path: str, vecnorm_path: str | None = None,
+             env_id: str | None = None):
         from stable_baselines3 import PPO
-        from utils import resolve_device
-        model = PPO.load(model_path, device=resolve_device("cpu"))
+        # MLP policy: CPU inference avoids host<->device copies on every query.
+        model = PPO.load(model_path, device="cpu")
         vecnorm = None
         if vecnorm_path and os.path.exists(vecnorm_path):
             from stable_baselines3.common.vec_env import VecNormalize, DummyVecEnv
-            # Loaded purely to reuse obs_rms; we only normalise observations.
-            vecnorm = VecNormalize.load(
-                vecnorm_path, DummyVecEnv([lambda: _ObsStub(model.observation_space)])
-            )
+            # Build a real env to satisfy SB3's gym-env check; we only reuse
+            # obs_rms to normalise observations (reward norm is off).
+            if env_id is None:
+                meta = os.path.join(os.path.dirname(model_path), "meta.json")
+                from envs.registry import EnvSpec
+                env_id = EnvSpec.from_json(meta).id
+            from envs.registry import make_env
+            thunk = make_env(env_id)
+            vecnorm = VecNormalize.load(vecnorm_path, DummyVecEnv([thunk]))
             vecnorm.training = False
             vecnorm.norm_reward = False
         return cls(model, vecnorm)
@@ -62,25 +68,6 @@ class PolicyOracle:
     __call__ = mean_action
 
 
-class _ObsStub:
-    """Minimal env exposing only the spaces VecNormalize.load needs."""
-    def __init__(self, observation_space):
-        import gymnasium as gym
-        self.observation_space = observation_space
-        self.action_space = gym.spaces.Box(low=-1, high=1, shape=(1,))
-        self.metadata = {}
-        self.render_mode = None
-
-    def reset(self, *a, **k):
-        return self.observation_space.sample(), {}
-
-    def step(self, a):
-        return self.observation_space.sample(), 0.0, False, False, {}
-
-    def close(self):
-        pass
-
-
 def train_ppo(
     env_name: str,
     out_dir: str,
@@ -99,7 +86,6 @@ def train_ppo(
     from stable_baselines3.common.env_util import make_vec_env
 
     from envs.registry import probe_spec
-    from utils import resolve_device
 
     os.makedirs(out_dir, exist_ok=True)
     spec = probe_spec(env_name)
@@ -110,8 +96,10 @@ def train_ppo(
         venv = VecNormalize(venv, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
     ppo_kwargs = ppo_kwargs or {}
+    # MLP-policy PPO is faster on CPU; GPU transfer overhead dominates the
+    # tiny per-step tensors (see SB3 issue #1245). Force CPU regardless of GPU.
     model = PPO("MlpPolicy", venv, seed=seed, verbose=1,
-                device=resolve_device("cpu"), **ppo_kwargs)
+                device="cpu", **ppo_kwargs)
     model.learn(total_timesteps=total_timesteps)
 
     model.save(os.path.join(out_dir, "model.zip"))

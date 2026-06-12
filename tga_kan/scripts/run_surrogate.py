@@ -42,7 +42,8 @@ def main():
     spec = EnvSpec.from_json(os.path.join(args.run, "meta.json"))
     vp = os.path.join(args.run, "vecnormalize.pkl")
     oracle = PolicyOracle.load(os.path.join(args.run, "model.zip"),
-                               vp if os.path.exists(vp) else None)
+                               vp if os.path.exists(vp) else None,
+                               env_id=spec.id)
     env_thunk = make_env(spec.id)
 
     overrides = {}

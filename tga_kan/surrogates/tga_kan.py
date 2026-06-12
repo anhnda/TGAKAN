@@ -184,15 +184,14 @@ class TGAKANSurrogate(BaseSurrogate):
     def __init__(self, act_dim, obs_dim, *, K=4, n_literals=8, oblique=True,
                  n_basis=12, max_pairs=64, epochs=300, lr=3e-3, batch=4096,
                  lam_tr=1.0, lam_g=1e-3, lam_2=1e-3, lam_c=1e-2,
-                 alpha_schedule=(1.0, 12.0), device="auto", seed=0, verbose=True):
-        from utils import resolve_device
+                 alpha_schedule=(1.0, 12.0), device="cuda", seed=0, verbose=True):
         self.cfg = dict(K=K, n_literals=n_literals, oblique=oblique,
                         n_basis=n_basis, max_pairs=max_pairs)
         self.act_dim, self.obs_dim = act_dim, obs_dim
         self.epochs, self.lr, self.batch = epochs, lr, batch
         self.lam_tr, self.lam_g, self.lam_2, self.lam_c = lam_tr, lam_g, lam_2, lam_c
         self.alpha_schedule = alpha_schedule
-        self.device = resolve_device(device)
+        self.device = device
         self.seed, self.verbose = seed, verbose
         self.model = None
         self.mu_ = None; self.sd_ = None
