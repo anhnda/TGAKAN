@@ -184,7 +184,7 @@ class TGAKANSurrogate(BaseSurrogate):
     def __init__(self, act_dim, obs_dim, *, K=4, n_literals=8, oblique=True,
                  n_basis=12, max_pairs=64, epochs=300, lr=3e-3, batch=4096,
                  lam_tr=1.0, lam_g=1e-3, lam_2=1e-3, lam_c=1e-2,
-                 alpha_schedule=(1.0, 12.0), device="auto", seed=0, verbose=True):
+                 alpha_schedule=(1.0, 12.0), device="cpu", seed=0, verbose=True):
         from utils import resolve_device
         self.cfg = dict(K=K, n_literals=n_literals, oblique=oblique,
                         n_basis=n_basis, max_pairs=max_pairs)

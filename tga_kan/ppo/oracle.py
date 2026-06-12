@@ -111,7 +111,7 @@ def train_ppo(
 
     ppo_kwargs = ppo_kwargs or {}
     model = PPO("MlpPolicy", venv, seed=seed, verbose=1,
-                device=resolve_device("auto"), **ppo_kwargs)
+                device=resolve_device("cpu"), **ppo_kwargs)
     model.learn(total_timesteps=total_timesteps)
 
     model.save(os.path.join(out_dir, "model.zip"))
