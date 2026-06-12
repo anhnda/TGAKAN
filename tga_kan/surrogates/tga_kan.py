@@ -143,7 +143,7 @@ class TGAKANModule(nn.Module):
             # conditional means via coarse bins on s_i and s_j
             for p, (i, j) in enumerate(expert.pairs):
                 for col in (i, j):
-                    bins = torch.bucketize(s[:, col],
+                    bins = torch.bucketize(s[:, col].contiguous(),
                                            torch.linspace(-3, 3, 6, device=s.device))
                     for b in bins.unique():
                         m = bins == b
@@ -237,7 +237,7 @@ class TGAKANSurrogate(BaseSurrogate):
                 if tr is not None:
                     loss = loss + self.lam_tr * self.model.boundary_loss(*tr)
                 opt.zero_grad(); loss.backward(); opt.step()
-                tot += float(fid) * len(idx)
+                tot += fid.detach().item() * len(idx)
             if self.verbose and (ep % 50 == 0 or ep == self.epochs - 1):
                 print(f"[tga-kan] ep {ep:4d}  fid_mse={tot / N:.5f}  "
                       f"K_active={self.model.gate.active_clause_count()}")
