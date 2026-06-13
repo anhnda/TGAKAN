@@ -183,7 +183,7 @@ class TGAKANSurrogate(BaseSurrogate):
 
     def __init__(self, act_dim, obs_dim, *, K=4, n_literals=8, oblique=True,
                  n_basis=12, max_pairs=64, epochs=300, lr=3e-3, batch=4096,
-                 lam_tr=1.0, lam_g=1e-3, lam_2=1e-3, lam_c=1e-2,
+                 lam_tr=1.0, lam_g=3e-2, lam_2=1e-3, lam_c=1e-2,
                  alpha_schedule=(1.0, 12.0), device="cuda", seed=0, verbose=True):
         self.cfg = dict(K=K, n_literals=n_literals, oblique=oblique,
                         n_basis=n_basis, max_pairs=max_pairs)
@@ -239,8 +239,10 @@ class TGAKANSurrogate(BaseSurrogate):
                 opt.zero_grad(); loss.backward(); opt.step()
                 tot += fid.detach().item() * len(idx)
             if self.verbose and (ep % 50 == 0 or ep == self.epochs - 1):
+                with torch.no_grad():
+                    k_act = self.model.gate.active_clause_count(Xt[:min(N, 8192)])
                 print(f"[tga-kan] ep {ep:4d}  fid_mse={tot / N:.5f}  "
-                      f"K_active={self.model.gate.active_clause_count()}")
+                      f"K_active={k_act}")
         return self
 
     def predict(self, S):
@@ -252,9 +254,13 @@ class TGAKANSurrogate(BaseSurrogate):
         self.model.train()
         return ahat.cpu().numpy()
 
-    def explain(self, **kwargs):
+    def explain(self, S=None, **kwargs):
+        s_t = None
+        if S is not None:
+            Sn = self._standardize(np.asarray(S, np.float32), fit=False)
+            s_t = torch.tensor(Sn, device=self.device)
         return {
-            "active_clauses": self.model.gate.active_clause_count(),
+            "active_clauses": self.model.gate.active_clause_count(s_t),
             "n_candidate_pairs": len(self.model.pairs),
             "surface_norms": [
                 (e.c2 ** 2).sum(dim=(-1, -2)).sqrt().detach().cpu().numpy()

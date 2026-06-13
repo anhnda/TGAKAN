@@ -45,6 +45,13 @@ class SoftDNFGate(nn.Module):
         self.z_logits = nn.Parameter(torch.randn(K, self.M, generator=g) * 0.1 + 0.5)
         self.z_temp = 0.5
 
+        # per-clause activation logit: an explicit off-switch for each regime.
+        # logsigmoid(clause_logit) biases log_c toward -inf, removing a clause
+        # from the softmax. Without this, an empty clause has log_c=0 (the max
+        # achievable, since log l_m <= 0) and would DOMINATE the gate, so MDL
+        # could never collapse K. Init positive so all clauses start "on".
+        self.clause_logit = nn.Parameter(torch.full((K,), 2.0))
+
     # -- annealing ----------------------------------------------------------
     def set_alpha(self, alpha: float):
         self.alpha.fill_(float(alpha))
@@ -76,24 +83,37 @@ class SoftDNFGate(nn.Module):
         # log clause: sum_m z_km log l_m
         log_c = z[None] * torch.log(lit)[:, None, :]       # (N, K, M)
         log_c = log_c.sum(-1)                              # (N, K)
+        # off-switch: dead clauses (clause_logit -> -inf) get log_c -> -inf and
+        # drop out of the softmax. logsigmoid(.) in (-inf, 0].
+        log_c = log_c + F.logsigmoid(self.clause_logit)[None]
         g = F.softmax(self.gamma * log_c, dim=-1)          # (N, K)
         aux = {"literals": lit, "z": z, "log_c": log_c}
         return g, aux
 
     # -- penalties ----------------------------------------------------------
     def mdl_penalty(self):
-        """MDL-style: number of active clauses + total active literal count.
+        """MDL-style: number of active clauses + their active literal count.
 
-        Uses soft selector mass so it's differentiable; drives unused clauses
-        and literals to zero, collapsing K -> 1 when no switching is needed.
+        Penalty is gated by per-clause activation a_k = sigmoid(clause_logit),
+        which is the actual off-switch in forward(). Driving a_k -> 0 removes a
+        clause from the softmax AND zeroes its literal cost, so unused regimes
+        collapse and K -> 1 when no switching is needed.
         """
-        z = torch.sigmoid(self.z_logits / self.z_temp)     # (K, M)
-        literal_count = z.sum()                            # total literals used
-        clause_activity = z.sum(-1)                        # (K,) literals per clause
-        active_clauses = torch.sigmoid(4.0 * (clause_activity - 0.5)).sum()
+        a = torch.sigmoid(self.clause_logit)              # (K,) per-clause "on"
+        z = torch.sigmoid(self.z_logits / self.z_temp)    # (K, M)
+        active_clauses = a.sum()
+        literal_count = (a[:, None] * z).sum()            # literals in live clauses
         return active_clauses + 0.1 * literal_count
 
     @torch.no_grad()
-    def active_clause_count(self, thresh=0.5):
-        z = (torch.sigmoid(self.z_logits / self.z_temp) > thresh).float()
-        return int((z.sum(-1) > 0).sum().item())
+    def active_clause_count(self, s=None, thresh=1e-2):
+        """Number of regimes that actually carry gate mass.
+
+        If states `s` are given, count regimes whose mean gate weight exceeds
+        `thresh` (the data-driven, self-sizing notion of K). Otherwise fall back
+        to the structural count of switched-on clauses.
+        """
+        if s is not None:
+            g, _ = self.forward(s, hard=False)
+            return int((g.mean(0) > thresh).sum().item())
+        return int((torch.sigmoid(self.clause_logit) > 0.5).sum().item())
