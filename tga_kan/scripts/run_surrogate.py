@@ -35,6 +35,19 @@ def main():
     ap.add_argument("--K", type=int, default=4)
     ap.add_argument("--oblique", action="store_true", default=True)
     ap.add_argument("--axis-only", dest="oblique", action="store_false")
+    # regularizer weights (default None -> use TGAKANSurrogate defaults)
+    ap.add_argument("--lam-tr", dest="lam_tr", type=float, default=None,
+                    help="boundary/trajectory weight (Eq. 8)")
+    ap.add_argument("--lam-g", dest="lam_g", type=float, default=None,
+                    help="MDL gate weight (drives K down, §3)")
+    ap.add_argument("--lam-2", dest="lam_2", type=float, default=None,
+                    help="group-lasso weight on second-order surfaces")
+    ap.add_argument("--lam-c", dest="lam_c", type=float, default=None,
+                    help="ANOVA purge weight (Eq. 5)")
+    ap.add_argument("--n-basis", dest="n_basis", type=int, default=None,
+                    help="spline basis count per 1-D term")
+    ap.add_argument("--max-pairs", dest="max_pairs", type=int, default=None,
+                    help="cap on candidate second-order pairs")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default=None)
     ap.add_argument("--save", default=None,
@@ -52,6 +65,12 @@ def main():
     if args.surrogate.lower() in ("tga", "tga-kan", "tga_kan"):
         overrides = dict(K=args.K, oblique=args.oblique, epochs=args.epochs,
                          seed=args.seed)
+        # only pass regularizer overrides that were explicitly set, so the
+        # surrogate's own defaults stand otherwise
+        for name in ("lam_tr", "lam_g", "lam_2", "lam_c", "n_basis", "max_pairs"):
+            val = getattr(args, name)
+            if val is not None:
+                overrides[name] = val
     surrogate = make_surrogate(args.surrogate, spec.act_dim, spec.obs_dim, **overrides)
 
     surrogate, _ = dagger(env_thunk, oracle, surrogate,
