@@ -154,8 +154,8 @@ class TGAKANModule(nn.Module):
     def group_lasso(self):
         return sum(e.group_lasso() for e in self.experts)
 
-    def mdl(self):
-        return self.gate.mdl_penalty()
+    def mdl(self, s=None):
+        return self.gate.mdl_penalty(s)
 
     def boundary_loss(self, s, s_next):
         """Eq. (8): ||a_hat(s)-a_hat(s')||^2 over pairs that CROSS a regime.
@@ -238,7 +238,7 @@ class TGAKANSurrogate(BaseSurrogate):
                 s, y = Xt[idx], Yt[idx]
                 ahat, _ = self.model(s)
                 fid = ((ahat - y) ** 2).sum(-1).mean()
-                loss = fid + self.lam_g * self.model.mdl() \
+                loss = fid + self.lam_g * self.model.mdl(s) \
                            + self.lam_2 * self.model.group_lasso() \
                            + self.lam_c * self.model.anova_penalty(s)
                 if tr is not None:

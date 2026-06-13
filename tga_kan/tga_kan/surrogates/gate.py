@@ -99,27 +99,44 @@ class SoftDNFGate(nn.Module):
         clause from the softmax AND zeroes its literal cost, so unused regimes
         collapse and K -> 1 when no switching is needed.
         """
-        a = torch.sigmoid(self.clause_logit)              # (K,) per-clause "on"
+    def mdl_penalty(self, s=None):
+        """MDL-style cost on the number of regimes that carry data mass.
+
+        Penalizing sum(sigmoid(clause_logit)) alone pushes every clause down
+        UNIFORMLY, which shifts the softmax by a constant and changes nothing —
+        mass stays spread and K never collapses (it just looked like "0" once
+        all logits went negative). Instead we penalize the realized per-regime
+        mass distribution p_k = mean_s g_k(s): a soft count of regimes with
+        non-trivial mass, which gradient can reduce only by CONCENTRATING mass
+        into fewer regimes. The literal term keeps live clauses simple.
+        """
+        a = torch.sigmoid(self.clause_logit)              # (K,)
         z = torch.sigmoid(self.z_logits / self.z_temp)    # (K, M)
-        active_clauses = a.sum()
-        literal_count = (a[:, None] * z).sum()            # literals in live clauses
-        return active_clauses + 0.1 * literal_count
+        literal_count = (a[:, None] * z).sum()
+        if s is None:
+            return a.sum() + 0.1 * literal_count
+        g, _ = self.forward(s, hard=False)                # (N, K), differentiable
+        p = g.mean(0)                                     # (K,) regime mass
+        # soft count of mass-bearing regimes: sigmoid sharply rises above ~thresh
+        soft_active = torch.sigmoid(50.0 * (p - 0.02)).sum()
+        return soft_active + 0.1 * literal_count
 
     @torch.no_grad()
     def active_clause_count(self, s=None, thresh=1e-2):
-        """Number of regimes that actually carry gate mass.
+        """Number of regimes that actually carry gate mass over the data.
 
-        Measured deterministically: hard=True drops the Gumbel noise so the
-        count doesn't flicker between epochs. A regime counts as active only if
-        its off-switch is on AND it carries data mass above `thresh`.
+        Counted purely from realized gate mass (deterministic, hard=True). The
+        off-switch already removes a dead clause from the softmax, so a regime
+        that's truly off contributes ~0 mass and isn't counted. We do NOT also
+        require sigmoid(clause_logit)>0.5: the softmax always sums to 1, so the
+        surviving regime keeps its mass even when every clause_logit is negative
+        — gating the count on the off-switch too would spuriously report 0.
         """
-        on = torch.sigmoid(self.clause_logit) > 0.5        # (K,) off-switch
         if s is None:
-            return int(on.sum().item())
+            return int((torch.sigmoid(self.clause_logit) > 0.5).sum().item())
         was_training = self.training
         self.eval()
         g, _ = self.forward(s, hard=True)                  # no Gumbel noise
         if was_training:
             self.train()
-        mass = g.mean(0) > thresh                          # (K,)
-        return int((on & mass).sum().item())
+        return int((g.mean(0) > thresh).sum().item())
