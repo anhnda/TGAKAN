@@ -282,8 +282,14 @@ def main():
         if e.c2 is not None:
             all_norms.append(e.c2.detach().pow(2).sum(dim=(-1, -2)).sqrt().cpu().numpy())
     max_norm = float(np.max([a.max() for a in all_norms])) if all_norms else 0.0
-    if max_norm == 0.0:
-        w_("_No candidate pairs, or all surfaces are exactly zero._")
+    if len(model.pairs) == 0:
+        w_("_Second-order terms are disabled (max_pairs=0): this is a "
+           "first-order / linear-consequent model by construction. The emitted "
+           "action is `beta + sum_i psi_i(s_i)` per regime — no interactions._")
+        w_("")
+        max_norm = 0.0
+    elif max_norm == 0.0:
+        w_("_All surfaces are exactly zero (pruned by the group-lasso)._")
         w_("")
     else:
         kept_any = False

@@ -99,12 +99,23 @@ class KANExpert(nn.Module):
 
 class TGAKANModule(nn.Module):
     def __init__(self, act_dim, obs_dim, K=4, n_literals=8, oblique=True,
-                 n_basis=12, max_pairs=None, lo=-3.0, hi=3.0, seed=0):
+                 n_basis=12, max_pairs=0, lo=-3.0, hi=3.0, seed=0):
         super().__init__()
         self.D, self.n, self.K = act_dim, obs_dim, K
-        all_pairs = list(itertools.combinations(range(obs_dim), 2))
-        if max_pairs is not None and len(all_pairs) > max_pairs:
-            all_pairs = all_pairs[:max_pairs]      # cap candidate reserve for big obs
+        # Second-order terms are OFF by default (max_pairs=0). Most control
+        # policies (e.g. LunarLander's PD heuristic) are first-order/linear in
+        # the state with essentially no genuine pairwise interaction, yet the
+        # group-lasso at a default lambda_2 routinely fails to prune the all-
+        # pairs reserve (observed: 27 of 28 surfaces surviving), producing an
+        # uninterpretable consequent. So interactions are now opt-IN: you add
+        # them only when a first-order fit demonstrably underfits, via
+        # max_pairs>0. max_pairs=None still means "all C(n,2) pairs".
+        if max_pairs == 0:
+            all_pairs = []                          # no second-order terms
+        else:
+            all_pairs = list(itertools.combinations(range(obs_dim), 2))
+            if max_pairs is not None and len(all_pairs) > max_pairs:
+                all_pairs = all_pairs[:max_pairs]   # cap candidate reserve
         self.pairs = all_pairs
         self.gate = SoftDNFGate(obs_dim, K=K, n_literals=n_literals,
                                 oblique=oblique, seed=seed)
@@ -182,7 +193,7 @@ class TGAKANSurrogate(BaseSurrogate):
     """
 
     def __init__(self, act_dim, obs_dim, *, K=4, n_literals=8, oblique=True,
-                 n_basis=12, max_pairs=64, epochs=300, lr=3e-3, batch=4096,
+                 n_basis=12, max_pairs=0, epochs=300, lr=3e-3, batch=4096,
                  lam_tr=1.0, lam_g=3e-2, lam_2=1e-3, lam_c=1e-2,
                  alpha_schedule=(1.0, 12.0), device="cuda", seed=0, verbose=True):
         self.cfg = dict(K=K, n_literals=n_literals, oblique=oblique,

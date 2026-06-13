@@ -47,7 +47,11 @@ def main():
     ap.add_argument("--n-basis", dest="n_basis", type=int, default=None,
                     help="spline basis count per 1-D term")
     ap.add_argument("--max-pairs", dest="max_pairs", type=int, default=None,
-                    help="cap on candidate second-order pairs")
+                    help="second-order interaction pairs to RESERVE. Default 0 "
+                         "(no interactions; first-order/linear consequent only). "
+                         "Set >0 to opt in to N candidate pairs; pass -1 for all "
+                         "C(n,2). Interactions are off by default because the "
+                         "group-lasso under-prunes them on simple policies.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default=None)
     ap.add_argument("--save", default=None,
@@ -70,6 +74,9 @@ def main():
         for name in ("lam_tr", "lam_g", "lam_2", "lam_c", "n_basis", "max_pairs"):
             val = getattr(args, name)
             if val is not None:
+                # --max-pairs -1 is the sentinel for "all C(n,2) pairs"
+                if name == "max_pairs" and val < 0:
+                    val = None
                 overrides[name] = val
     surrogate = make_surrogate(args.surrogate, spec.act_dim, spec.obs_dim, **overrides)
 
