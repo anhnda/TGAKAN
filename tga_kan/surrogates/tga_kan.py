@@ -231,6 +231,19 @@ class TGAKANSurrogate(BaseSurrogate):
                 self.model.gate.set_alpha(a0 + (a1 - a0) * ep / max(1, self.epochs - 1))
             else:
                 self.model.gate.set_alpha(a1)
+            # Warm up the MDL pressure. Applying full lam_g from ep 0 prunes
+            # regimes while experts are still untrained (fid still ~0.5), so a
+            # regime is killed on noise before it can prove useful -- the model
+            # then gets stuck in a poor 1-regime optimum with inflated fid_mse.
+            # Hold lam_g=0 for the first `warm` epochs (pure fit), then ramp.
+            if self._fit_calls == 0:
+                warm = int(0.25 * self.epochs)
+                if ep < warm:
+                    lam_g_ep = 0.0
+                else:
+                    lam_g_ep = self.lam_g * (ep - warm) / max(1, self.epochs - 1 - warm)
+            else:
+                lam_g_ep = self.lam_g
             perm = torch.randperm(N, device=dev)
             tot = 0.0
             for b in range(0, N, self.batch):
@@ -238,7 +251,7 @@ class TGAKANSurrogate(BaseSurrogate):
                 s, y = Xt[idx], Yt[idx]
                 ahat, _ = self.model(s)
                 fid = ((ahat - y) ** 2).sum(-1).mean()
-                loss = fid + self.lam_g * self.model.mdl(s) \
+                loss = fid + lam_g_ep * self.model.mdl(s) \
                            + self.lam_2 * self.model.group_lasso() \
                            + self.lam_c * self.model.anova_penalty(s)
                 if tr is not None:
@@ -253,7 +266,7 @@ class TGAKANSurrogate(BaseSurrogate):
                 with torch.no_grad():
                     k_act = self.model.gate.active_clause_count(Xt[:min(N, 8192)])
                 print(f"[tga-kan] ep {ep:4d}  fid_mse={tot / N:.5f}  "
-                      f"K_active={k_act}")
+                      f"K_active={k_act}  lam_g={lam_g_ep:.4f}")
         self._fit_calls += 1
         return self
 
