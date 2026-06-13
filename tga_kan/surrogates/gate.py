@@ -91,35 +91,32 @@ class SoftDNFGate(nn.Module):
         return g, aux
 
     # -- penalties ----------------------------------------------------------
-    def mdl_penalty(self):
-        """MDL-style: number of active clauses + their active literal count.
-
-        Penalty is gated by per-clause activation a_k = sigmoid(clause_logit),
-        which is the actual off-switch in forward(). Driving a_k -> 0 removes a
-        clause from the softmax AND zeroes its literal cost, so unused regimes
-        collapse and K -> 1 when no switching is needed.
-        """
     def mdl_penalty(self, s=None):
-        """MDL-style cost on the number of regimes that carry data mass.
+        """MDL cost on the number of regimes that carry data mass.
 
         Penalizing sum(sigmoid(clause_logit)) alone pushes every clause down
         UNIFORMLY, which shifts the softmax by a constant and changes nothing —
         mass stays spread and K never collapses (it just looked like "0" once
         all logits went negative). Instead we penalize the realized per-regime
-        mass distribution p_k = mean_s g_k(s): a soft count of regimes with
-        non-trivial mass, which gradient can reduce only by CONCENTRATING mass
-        into fewer regimes. The literal term keeps live clauses simple.
+        mass p_k = mean_s g_k(s).
+
+        Crucially the FIRST regime is free: a surrogate always needs >=1 regime,
+        so charging it makes the penalty fight fidelity even on a 1-regime
+        policy. We charge only the EXCESS beyond one. A 2nd regime survives iff
+        the fidelity drop it buys exceeds lam_g * (its marginal MDL cost); this
+        is what lets the same lam_g keep K=1 on Pendulum yet K=2 on MountainCar,
+        instead of crushing every env to 1.
         """
         a = torch.sigmoid(self.clause_logit)              # (K,)
         z = torch.sigmoid(self.z_logits / self.z_temp)    # (K, M)
         literal_count = (a[:, None] * z).sum()
         if s is None:
-            return a.sum() + 0.1 * literal_count
+            return torch.relu(a.sum() - 1.0) + 0.1 * literal_count
         g, _ = self.forward(s, hard=False)                # (N, K), differentiable
-        p = g.mean(0)                                     # (K,) regime mass
-        # soft count of mass-bearing regimes: sigmoid sharply rises above ~thresh
+        p = g.mean(0)                                      # (K,) regime mass
         soft_active = torch.sigmoid(50.0 * (p - 0.02)).sum()
-        return soft_active + 0.1 * literal_count
+        excess = torch.relu(soft_active - 1.0)            # first regime free
+        return excess + 0.1 * literal_count
 
     @torch.no_grad()
     def active_clause_count(self, s=None, thresh=1e-2):
