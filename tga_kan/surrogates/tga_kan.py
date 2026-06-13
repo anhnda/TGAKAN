@@ -195,6 +195,7 @@ class TGAKANSurrogate(BaseSurrogate):
         self.seed, self.verbose = seed, verbose
         self.model = None
         self.mu_ = None; self.sd_ = None
+        self._fit_calls = 0          # DAgger iter counter, to continue annealing
 
     def _standardize(self, S, fit=False):
         if fit:
@@ -223,7 +224,13 @@ class TGAKANSurrogate(BaseSurrogate):
         N = len(Xt)
 
         for ep in range(self.epochs):
-            self.model.gate.set_alpha(a0 + (a1 - a0) * ep / max(1, self.epochs - 1))
+            # On the first fit, anneal a0 -> a1. On later DAgger iters keep the
+            # gate hard (a1): restarting the anneal re-softens regimes the model
+            # already collapsed, which makes K bounce back to its nominal value.
+            if self._fit_calls == 0:
+                self.model.gate.set_alpha(a0 + (a1 - a0) * ep / max(1, self.epochs - 1))
+            else:
+                self.model.gate.set_alpha(a1)
             perm = torch.randperm(N, device=dev)
             tot = 0.0
             for b in range(0, N, self.batch):
@@ -237,12 +244,17 @@ class TGAKANSurrogate(BaseSurrogate):
                 if tr is not None:
                     loss = loss + self.lam_tr * self.model.boundary_loss(*tr)
                 opt.zero_grad(); loss.backward(); opt.step()
+                with torch.no_grad():
+                    # keep the off-switch in a sane range so a clause MDL has
+                    # turned off can't be re-inflated to dominate in one step.
+                    self.model.gate.clause_logit.clamp_(-8.0, 4.0)
                 tot += fid.detach().item() * len(idx)
             if self.verbose and (ep % 50 == 0 or ep == self.epochs - 1):
                 with torch.no_grad():
                     k_act = self.model.gate.active_clause_count(Xt[:min(N, 8192)])
                 print(f"[tga-kan] ep {ep:4d}  fid_mse={tot / N:.5f}  "
                       f"K_active={k_act}")
+        self._fit_calls += 1
         return self
 
     def predict(self, S):

@@ -109,11 +109,17 @@ class SoftDNFGate(nn.Module):
     def active_clause_count(self, s=None, thresh=1e-2):
         """Number of regimes that actually carry gate mass.
 
-        If states `s` are given, count regimes whose mean gate weight exceeds
-        `thresh` (the data-driven, self-sizing notion of K). Otherwise fall back
-        to the structural count of switched-on clauses.
+        Measured deterministically: hard=True drops the Gumbel noise so the
+        count doesn't flicker between epochs. A regime counts as active only if
+        its off-switch is on AND it carries data mass above `thresh`.
         """
-        if s is not None:
-            g, _ = self.forward(s, hard=False)
-            return int((g.mean(0) > thresh).sum().item())
-        return int((torch.sigmoid(self.clause_logit) > 0.5).sum().item())
+        on = torch.sigmoid(self.clause_logit) > 0.5        # (K,) off-switch
+        if s is None:
+            return int(on.sum().item())
+        was_training = self.training
+        self.eval()
+        g, _ = self.forward(s, hard=True)                  # no Gumbel noise
+        if was_training:
+            self.train()
+        mass = g.mean(0) > thresh                          # (K,)
+        return int((on & mass).sum().item())
