@@ -56,7 +56,8 @@ def main():
     thr = args.threshold
     if thr is None:
         thr = {"LunarLanderContinuous-v3": 200.0, "BipedalWalker-v3": 300.0,
-               "MountainCarContinuous-v0": 90.0}.get(spec.id)
+               "MountainCarContinuous-v0": 90.0,
+               "Pendulum-v1": -200.0, "Reacher-v5": -10.0}.get(spec.id)
         if thr is None:
             ap.error(f"{spec.id} không có ngưỡng mặc định — truyền --threshold")
 

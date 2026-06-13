@@ -31,9 +31,9 @@ from eval.metrics import success_rate
 _DEFAULT_THRESHOLD = {
     "LunarLanderContinuous-v3": 200.0,
     "BipedalWalker-v3": 300.0,
-    "Pendulum-v1": None,                  # reward âm, không có 'solved' chuẩn
+    "Pendulum-v1": -200.0,                # reward âm; -200 ~ bar ổn định hợp lý
     "MountainCarContinuous-v0": 90.0,
-    "Reacher-v5": None,
+    "Reacher-v5": -10.0,
 }
 
 
