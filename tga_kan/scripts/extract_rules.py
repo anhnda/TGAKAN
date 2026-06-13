@@ -93,6 +93,9 @@ def main():
                     help="regime counts as active iff mean gate mass exceeds this")
     ap.add_argument("--sample-states", type=int, default=4096,
                     help="states drawn from N(mu_,sd_) to estimate realized gate mass")
+    ap.add_argument("--support-pct", type=float, default=2.0,
+                    help="percentile clip for support-aware effect ranking "
+                         "(2.0 -> use the 2nd..98th pct of states each regime owns)")
     ap.add_argument("--plots", action="store_true")
     args = ap.parse_args()
 
@@ -205,29 +208,68 @@ def main():
     w_("One CSV per (regime, output, feature) in `curves/`. Summary below reports "
        "the curve's value range (peak-to-peak) as an effect-strength proxy.")
     w_("")
-    grid_std = np.linspace(-3.0, 3.0, args.grid).astype(np.float32)
+    # Fix 1 (sentinel-0): the degree-0 indicator in the B-spline basis is
+    # half-open `x < k[1:]`, so the right boundary x=hi falls outside every
+    # interval and the partition-of-unity collapses there -> the curve's LAST
+    # sample is a hard ~0.0 regardless of the coefficients. That spurious row
+    # corrupts every ptp. Drop the trailing grid point: evaluate on the open
+    # interval [lo, hi) so no fabricated endpoint reaches the CSV or the ptp.
+    grid_std = np.linspace(-3.0, 3.0, args.grid + 1).astype(np.float32)[:-1]
+
+    # Fix 2 (support-aware ranking): rank effects on each regime's ACTUAL data
+    # support, not the full [-3,3] design range. A spline can swing wildly in
+    # sparse extrapolation regions it never sees on-policy (the regime-2 `x`
+    # edge-cliff); those swings are boundary artifacts, not control laws.
+    # We approximate per-regime support from the sampled states routed to each
+    # regime under the hard gate, in standardised coords, and clip the curve to
+    # [p_lo, p_hi] (default 2-98th pct) before computing ptp.
+    g_assign = g_hard.argmax(-1).cpu().numpy()                    # (N,) regime id
+    S_std_np = S_std                                              # (N, n) standardised
+    support_std = {}                                             # k -> (n,2) [lo,hi]
+    for k in active:
+        sel = S_std_np[g_assign == k]
+        if sel.shape[0] >= 8:
+            lo_q = np.percentile(sel, args.support_pct, axis=0)
+            hi_q = np.percentile(sel, 100.0 - args.support_pct, axis=0)
+        else:
+            # too few routed states to trust: fall back to full range
+            lo_q = np.full(n, -3.0, np.float32)
+            hi_q = np.full(n, 3.0, np.float32)
+        support_std[k] = np.stack([lo_q, hi_q], axis=1).astype(np.float32)
+
     for k in active:
         expert = model.experts[k]
         basis = expert.basis
         c1 = expert.c1.detach().cpu()                              # (D, n, nb)
+        supp = support_std[k]                                      # (n, 2)
         for d in range(D):
             ranges = []
             for i in range(n):
                 curve = _eval_spline_curve(basis, c1[d, i], grid_std)
-                ptp = float(curve.max() - curve.min())
+                # support-aware ptp: only consider the curve where this regime
+                # actually has data on feature i.
+                in_supp = (grid_std >= supp[i, 0]) & (grid_std <= supp[i, 1])
+                if in_supp.any():
+                    cvals = curve[in_supp]
+                    ptp = float(cvals.max() - cvals.min())
+                else:
+                    ptp = 0.0
                 ranges.append((i, ptp))
-                # write CSV in physical x-units
+                # write CSV in physical x-units (full grid; a `support` column
+                # flags which rows are inside this regime's data support)
                 fn = os.path.join(out, "curves",
                                   f"reg{k}_{act_lbl[d]}_{obs_lbl[i]}.csv")
                 with open(fn, "w", newline="") as f:
                     cw = csv.writer(f)
-                    cw.writerow([obs_lbl[i], f"psi_{act_lbl[d]}"])
-                    for xs, yv in zip(grid_std, curve):
-                        cw.writerow([f"{unstd(i, xs):.6g}", f"{yv:.6g}"])
+                    cw.writerow([obs_lbl[i], f"psi_{act_lbl[d]}", "in_support"])
+                    for xs, yv, ins in zip(grid_std, curve, in_supp):
+                        cw.writerow([f"{unstd(i, xs):.6g}", f"{yv:.6g}",
+                                     int(bool(ins))])
             ranges.sort(key=lambda t: -t[1])
             top = ", ".join(f"{obs_lbl[i]} (ptp={p:.3g})" for i, p in ranges[:3])
             w_(f"- regime {k}, output `{act_lbl[d]}`: intercept "
-               f"beta={float(expert.beta[d]):+.4g}; strongest effects: {top}")
+               f"beta={float(expert.beta[d]):+.4g}; strongest effects "
+               f"(support-aware): {top}")
     w_("")
 
     # ----- Layer 3: surviving interaction surfaces ------------------------
@@ -245,7 +287,8 @@ def main():
         w_("")
     else:
         kept_any = False
-        sg = np.linspace(-3.0, 3.0, args.surf_grid).astype(np.float32)
+        # same open-interval fix as the first-order curves (drop x=hi sentinel)
+        sg = np.linspace(-3.0, 3.0, args.surf_grid + 1).astype(np.float32)[:-1]
         for k in active:
             e = model.experts[k]
             if e.c2 is None:

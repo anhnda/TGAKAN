@@ -56,6 +56,58 @@ class SoftDNFGate(nn.Module):
     def set_alpha(self, alpha: float):
         self.alpha.fill_(float(alpha))
 
+    # -- warm start ---------------------------------------------------------
+    @torch.no_grad()
+    def warm_start(self, s, seed=0):
+        """Fix 3 (init): seed literals/clauses from k-means on the state buffer.
+
+        Random literal directions rarely separate the on-policy state cloud, so
+        at init most clauses evaluate near-identically and the gate is degenerate
+        before training. We run a light k-means (K clusters) on the standardised
+        states and orient each clause toward its cluster: literal m gets a
+        direction toward centroid m and a threshold at the centroid's projection,
+        and clause k is wired to its own literal. This gives K genuinely distinct
+        regimes to start from; training then merges/prunes via MDL rather than
+        having to first discover any structure at all.
+        """
+        s = s.detach()
+        N = s.shape[0]
+        if N < self.K:
+            return
+        gcpu = torch.Generator(device="cpu").manual_seed(seed)
+        # init centroids = K random distinct states
+        idx = torch.randperm(N, generator=gcpu)[: self.K]
+        C = s[idx].clone()                                 # (K, obs_dim)
+        for _ in range(10):                                # Lloyd iterations
+            d2 = torch.cdist(s, C)                          # (N, K)
+            assign = d2.argmin(-1)                          # (N,)
+            for k in range(self.K):
+                m = assign == k
+                if m.any():
+                    C[k] = s[m].mean(0)
+        # one literal per clause (M >= K assumed for the readable axis-aligned
+        # case; if M<K we wrap around). Direction = unit vector to centroid,
+        # threshold = projection of the centroid (so the half-space opens at it).
+        for m in range(self.M):
+            k = m % self.K
+            v = C[k]
+            nv = v.norm().clamp(min=1e-6)
+            if self.oblique:
+                self.w[m].copy_(v / nv)
+            else:
+                # axis-aligned: point the selector at the centroid's dominant dim
+                self.feat_logits[m].zero_()
+                dom = int(v.abs().argmax().item())
+                self.feat_logits[m, dom] = 3.0
+                self.w_scale[m].fill_(float(torch.sign(v[dom]).item()) or 1.0)
+            self.tau[m].fill_(float((v / nv) @ v) if self.oblique
+                              else float(v[int(v.abs().argmax())]))
+        # wire clause k -> literal (k mod M) on, others off
+        self.z_logits.fill_(-2.0)
+        for k in range(self.K):
+            self.z_logits[k, k % self.M] = 2.0
+        self.clause_logit.fill_(2.0)
+
     # -- literal directions -------------------------------------------------
     def _w(self):
         if self.oblique:
@@ -83,6 +135,17 @@ class SoftDNFGate(nn.Module):
         # log clause: sum_m z_km log l_m
         log_c = z[None] * torch.log(lit)[:, None, :]       # (N, K, M)
         log_c = log_c.sum(-1)                              # (N, K)
+        # Fix 3 (gate-init collapse): sum_m z log l_m is the log of a PRODUCT of
+        # sigmoids, so a clause with more active literals has a more negative
+        # log_c purely because it multiplies more (<=1) factors — independent of
+        # whether those literals fire. At init that makes the softmax near
+        # one-hot toward the SHORTEST clause, and MDL then prunes the rest before
+        # training can use them (the observed 4->2 collapse at lam_g=0). Divide
+        # by the active-literal count so log_c is the MEAN log-literal (geometric
+        # mean of the literals): clause score no longer depends on clause length,
+        # only on how well its literals are satisfied.
+        zcount = z.sum(-1).clamp(min=1.0)                  # (K,) active literals
+        log_c = log_c / zcount[None]                       # (N, K)
         # off-switch: dead clauses (clause_logit -> -inf) get log_c -> -inf and
         # drop out of the softmax. logsigmoid(.) in (-inf, 0].
         log_c = log_c + F.logsigmoid(self.clause_logit)[None]
@@ -100,12 +163,12 @@ class SoftDNFGate(nn.Module):
         all logits went negative). Instead we penalize the realized per-regime
         mass p_k = mean_s g_k(s).
 
-        Crucially the FIRST regime is free: a surrogate always needs >=1 regime,
-        so charging it makes the penalty fight fidelity even on a 1-regime
-        policy. We charge only the EXCESS beyond one. A 2nd regime survives iff
-        the fidelity drop it buys exceeds lam_g * (its marginal MDL cost); this
-        is what lets the same lam_g keep K=1 on Pendulum yet K=2 on MountainCar,
-        instead of crushing every env to 1.
+        The FIRST regime is free (we subtract the largest mass), because a
+        surrogate always needs >=1 regime. We charge the EXCESS mass carried by
+        all other regimes with a smooth, NON-SATURATING cost (see Fix 4 below):
+        a 2nd regime survives iff the fidelity drop it buys exceeds lam_g times
+        its marginal mass. This is what lets one CV-selected lam_g keep K=1 on
+        Pendulum yet K=2 on MountainCar, instead of crushing every env to 1.
         """
         a = torch.sigmoid(self.clause_logit)              # (K,)
         z = torch.sigmoid(self.z_logits / self.z_temp)    # (K, M)
@@ -114,9 +177,18 @@ class SoftDNFGate(nn.Module):
             return torch.relu(a.sum() - 1.0) + 0.1 * literal_count
         g, _ = self.forward(s, hard=False)                # (N, K), differentiable
         p = g.mean(0)                                      # (K,) regime mass
-        soft_active = torch.sigmoid(50.0 * (p - 0.02)).sum()
-        excess = torch.relu(soft_active - 1.0)            # first regime free
-        return excess + 0.1 * literal_count
+        # Fix 4 (MDL saturation): the old sigmoid(50*(p-0.02)) saturates to ~1
+        # for ANY regime above ~2% mass, so its gradient w.r.t. p is ~0 on every
+        # healthy regime — it can count regimes but cannot trade a real regime's
+        # fidelity against its mass, which is what the paper claims it does.
+        # Replace with a smooth, non-saturating cost on the mass carried by every
+        # regime EXCEPT the largest (the first regime is always free): sum of all
+        # masses minus the top one. Gradient is constant in p (=1 per extra
+        # regime, scaled by mass), so a 2nd regime survives iff its fidelity gain
+        # exceeds lam_g * its mass — a genuine fidelity/complexity trade.
+        top = p.max()
+        excess_mass = (p.sum() - top)                     # mass beyond top regime
+        return excess_mass + 0.1 * literal_count
 
     @torch.no_grad()
     def active_clause_count(self, s=None, thresh=1e-2):

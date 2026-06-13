@@ -219,6 +219,11 @@ class TGAKANSurrogate(BaseSurrogate):
         if self.model is None:
             self.model = TGAKANModule(self.act_dim, self.obs_dim,
                                       seed=self.seed, **self.cfg).to(dev)
+            # Fix 3 (init): seed gate clauses from k-means on the state buffer so
+            # the K regimes start genuinely distinct, instead of from near-
+            # degenerate random directions that collapse before training uses
+            # them.
+            self.model.gate.warm_start(Xt, seed=self.seed)
         opt = torch.optim.Adam(self.model.parameters(), lr=self.lr)
         a0, a1 = self.alpha_schedule
         N = len(Xt)
