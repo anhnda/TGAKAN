@@ -1,0 +1,23 @@
+
+Lunarv3
+python scripts/run_surrogate.py --run runs/lunarlander --surrogate tga \
+    --axis-only --K 3 --lam-g 0.05 --seed 0 \
+    --save runs/lunarlander/tga_fo.pt
+
+python scripts/extract_rules.py --run runs/lunarlander \
+    --load runs/lunarlander/tga_fo.pt --out runs/lunarlander/rules_fo
+python scripts/eval_surrogate.py --run runs/lunarlander \
+    --load runs/lunarlander/tga_fo.pt --surrogate tga --episodes 100
+
+
+Pendulum:
+
+python scripts/run_surrogate.py --run runs/pendulum --surrogate tga \
+    --axis-only --K 1 --max-pairs -1 --lam-2 1e-3 --lam-tr 0.01 --seed 0 \
+    --save runs/pendulum/tga_k1_so.pt
+
+python scripts/extract_rules.py --run runs/pendulum \
+    --load runs/pendulum/tga_k1_so.pt --out runs/pendulum/rules_fo
+
+python scripts/eval_surrogate.py --run runs/pendulum \
+    --load runs/pendulum/tga_k1_so.pt --surrogate tga --episodes 100
