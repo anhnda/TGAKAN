@@ -9,6 +9,17 @@ python scripts/extract_rules.py --run runs/lunarlander \
 python scripts/eval_surrogate.py --run runs/lunarlander \
     --load runs/lunarlander/tga_fo.pt --surrogate tga --episodes 100
 
+[extract] curves -> runs/lunarlander/rules_fo/curves
+[extract] surfaces -> runs/lunarlander/rules_fo/surfaces
+loaded tga <- runs/lunarlander/tga_fo.pt
+
+env=LunarLanderContinuous-v3  threshold=200.0  episodes=100
+  PPO       success= 96.0%  ret=249.8±47.6
+  tga       success= 93.0%  ret=239.9±61.9
+  pointwise MSE=0.03016  return_gap=10.0
+
+saved -> runs/lunarlander/eval_tga.json
+(cctracer) anhnda@xaibk1:~/TGAKAN/tga_kan$ pyth
 
 Pendulum:
 
@@ -21,3 +32,10 @@ python scripts/extract_rules.py --run runs/pendulum \
 
 python scripts/eval_surrogate.py --run runs/pendulum \
     --load runs/pendulum/tga_k1_so.pt --surrogate tga --episodes 100
+env=Pendulum-v1  threshold=-200.0  episodes=100
+  PPO       success= 74.0%  ret=-136.3±91.4
+  tga       success= 71.0%  ret=-144.6±100.3
+  pointwise MSE=0.05260  return_gap=8.3
+
+saved -> runs/pendulum/eval_tga.json
+(cctracer) anhnda@xaibk1:~/TGAKAN/tga_kan$ 
